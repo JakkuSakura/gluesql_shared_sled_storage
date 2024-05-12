@@ -12,7 +12,7 @@ async fn get_length(table: &mut Glue<SharedSledStorage>) -> Result<usize> {
 }
 #[tokio::test]
 async fn test_concurrent_access() -> Result<()> {
-    let db = SharedSledStorage::new(Config::default(), false);
+    let db = SharedSledStorage::new(Config::default())?;
     let mut table = Glue::new(db.clone());
     let _ = table.execute("CREATE TABLE t (a INT);").await;
     let len = get_length(&mut table).await?;

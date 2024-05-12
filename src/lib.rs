@@ -1,15 +1,15 @@
-pub use gluesql_sled_storage::*;
-pub use sled::*;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use gluesql_core::ast::{ColumnDef, IndexOperator, OrderByExpr};
 use gluesql_core::data::{Key, Schema, Value};
-use gluesql_core::error::{Error as GlueError, Result as GlueResult};
+use gluesql_core::error::Result as GlueResult;
 use gluesql_core::store::{
     AlterTable, CustomFunction, CustomFunctionMut, DataRow, Index, IndexMut, Metadata, RowIter,
     Store, StoreMut, Transaction,
 };
-use std::sync::Arc;
+pub use gluesql_sled_storage::*;
+pub use sled::*;
 use tokio::sync::{Mutex, Notify, RwLock};
 
 /// Lock and Notify
@@ -31,10 +31,8 @@ impl SharedSledStorage {
         Ok(this)
     }
     async fn open_transaction(&self) -> GlueResult<()> {
-        let (in_progress, notify) = &*self.transaction_state;
-
-        while in_progress.load(std::sync::atomic::Ordering::Relaxed) {
         let (lock, notify) = &*self.transaction_state;
+
         let mut in_progress = lock.lock().await;
         while *in_progress {
             // Drop the lock to allow others to modify the flag.
@@ -225,7 +223,7 @@ mod tests {
         use super::{Config, SharedSledStorage};
         {
             let config = Config::new();
-            SharedSledStorage::new(config, false);
+            SharedSledStorage::new(config);
         }
     }
 }

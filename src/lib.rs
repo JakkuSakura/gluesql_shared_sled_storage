@@ -19,27 +19,21 @@ type TransactionState = (AtomicBool, Notify);
 pub struct SharedSledStorage {
     database: Arc<RwLock<SledStorage>>,
     transaction_state: Arc<TransactionState>, // Combined Mutex for state and Notify for signaling
-    await_active_transaction: bool, // if set false, collided Transaction::begin() will return error
 }
 
 impl SharedSledStorage {
-    pub fn new(sled_config: Config, await_active_transaction: bool) -> Self {
+    pub fn new(sled_config: Config) -> Result<Self> {
         let database = gluesql_sled_storage::SledStorage::try_from(sled_config).unwrap();
         let database = Arc::new(RwLock::new(database));
-        SharedSledStorage {
+        let this = SharedSledStorage {
             database,
             transaction_state: Arc::new((false.into(), Notify::new())),
-            await_active_transaction,
-        }
+        };
+        Ok(this)
     }
     async fn open_transaction(&self) -> GlueResult<()> {
         let (in_progress, notify) = &*self.transaction_state;
-        if !self.await_active_transaction && in_progress.load(std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(GlueError::StorageMsg(
-                "other transaction in progress".to_string(),
-            ));
-        }
+
         while in_progress.load(std::sync::atomic::Ordering::Relaxed) {
             // Await notification that the transaction has completed.
             notify.notified().await;
@@ -215,16 +209,6 @@ impl IndexMut for SharedSledStorage {
 impl Metadata for SharedSledStorage {}
 impl CustomFunction for SharedSledStorage {}
 impl CustomFunctionMut for SharedSledStorage {}
-impl Drop for SharedSledStorage {
-    fn drop(&mut self) {
-        // rollback && commit before drop so a transaction is closed
-        let (in_progress, _) = &*self.transaction_state.clone();
-        if in_progress.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = futures::executor::block_on(self.rollback());
-        }
-        let _ = futures::executor::block_on(self.commit());
-    }
-}
 
 #[cfg(test)]
 mod tests {

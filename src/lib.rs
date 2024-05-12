@@ -9,12 +9,11 @@ use gluesql_core::store::{
     AlterTable, CustomFunction, CustomFunctionMut, DataRow, Index, IndexMut, Metadata, RowIter,
     Store, StoreMut, Transaction,
 };
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 /// Lock and Notify
-type TransactionState = (AtomicBool, Notify);
+type TransactionState = (Mutex<bool>, Notify);
 #[derive(Clone, Debug)]
 pub struct SharedSledStorage {
     database: Arc<RwLock<SledStorage>>,
@@ -27,7 +26,7 @@ impl SharedSledStorage {
         let database = Arc::new(RwLock::new(database));
         let this = SharedSledStorage {
             database,
-            transaction_state: Arc::new((false.into(), Notify::new())),
+            transaction_state: Arc::new((Mutex::new(false), Notify::new())),
         };
         Ok(this)
     }
@@ -35,17 +34,25 @@ impl SharedSledStorage {
         let (in_progress, notify) = &*self.transaction_state;
 
         while in_progress.load(std::sync::atomic::Ordering::Relaxed) {
+        let (lock, notify) = &*self.transaction_state;
+        let mut in_progress = lock.lock().await;
+        while *in_progress {
+            // Drop the lock to allow others to modify the flag.
+            drop(in_progress);
             // Await notification that the transaction has completed.
             notify.notified().await;
+            // Re-acquire the lock to check the flag again.
+            in_progress = lock.lock().await;
         }
         // Mark the transaction as started
-        in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
+        *in_progress = true;
         Ok(())
     }
     async fn close_transaction(&self) {
         // Set the transaction as not in progress and notify all waiting.
-        let (in_progress, notify) = &*self.transaction_state;
-        in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
+        let (lock, notify) = &*self.transaction_state;
+        let mut in_progress = lock.lock().await;
+        *in_progress = false;
         notify.notify_waiters();
     }
 }
